@@ -7,7 +7,7 @@
     {"name": "Size", "type": "INT64"},
     {"name": "State", "type": "STRING"},
     {"name": "LastUpdate", "type": "TIMESTAMP"},
-    {"name": "FileName", "type": "STRING(205)"}
+    {"name": "FileName", "type": "STRING"}
   ],
   "backup_log": [
     {"name": "id", "type": "INT64"},
