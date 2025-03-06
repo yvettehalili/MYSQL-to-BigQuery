@@ -57,17 +57,15 @@ def cleanup_old_files():
     except Exception as e:
         logging.error(f"Error during cleanup of old files: {e}")
 
-def extract_from_mysql(table_name, is_daily=False):
-    """Extract data from MySQL table."""
+def extract_from_mysql(table_name, date_column):
+    """Extract data from MySQL table for the current day."""
     engine = None
     try:
         engine = create_engine_url()
 
-        if is_daily and table_name in ['backup_log', 'daily_log']:
-            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-            query = f"SELECT * FROM {table_name} WHERE DATE(backup_date) = '{yesterday}'"
-        else:
-            query = f"SELECT * FROM {table_name}"
+        # Filter data based on the current date
+        today = datetime.now().strftime('%Y-%m-%d')
+        query = f"SELECT * FROM {table_name} WHERE DATE({date_column}) = '{today}'"
 
         df = pd.read_sql(query, engine)
 
@@ -124,22 +122,19 @@ def get_schema_from_config(table_name):
 
     return schema
 
-def load_to_bigquery(df, table_name, is_daily=False):
+def load_to_bigquery(df, table_name):
     """Load data into BigQuery."""
     try:
+        if df.empty:
+            logging.info(f"No new data to load for table: {table_name}")
+            return
+
         table_ref = f"{project_id}.{dataset_id}.{table_name}"
 
         job_config = bigquery.LoadJobConfig()
         job_config.schema = get_schema_from_config(table_name)
         job_config.source_format = bigquery.SourceFormat.NEWLINE_DELIMITED_JSON
-
-        if table_name == 'daily_log':
-            job_config.time_partitioning = bigquery.TimePartitioning(
-                type_=bigquery.TimePartitioningType.DAY,
-                field="BackupDate"
-            )
-
-        job_config.write_disposition = bigquery.WriteDisposition.WRITE_APPEND if is_daily else bigquery.WriteDisposition.WRITE_TRUNCATE
+        job_config.write_disposition = bigquery.WriteDisposition.WRITE_APPEND
 
         # Create a temporary file
         with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_file:
@@ -179,7 +174,7 @@ def get_mysql_tables():
         if engine:
             engine.dispose()
 
-def run_etl(is_daily=False):
+def run_etl():
     """Main ETL process."""
     try:
         tables = get_mysql_tables()
@@ -187,10 +182,14 @@ def run_etl(is_daily=False):
 
         for table_name in tables:
             logging.info(f"Processing table: {table_name}")
-            df = extract_from_mysql(table_name, is_daily)
+
+            # Determine the date column to filter by
+            date_column = 'creation_date' if table_name == 'database_list' else 'backup_date'
+
+            df = extract_from_mysql(table_name, date_column)
             if not df.empty:
                 df = transform_data(df, table_name)
-                load_to_bigquery(df, table_name, is_daily)
+                load_to_bigquery(df, table_name)
             else:
                 logging.warning(f"No data extracted for table: {table_name}")
 
@@ -201,12 +200,8 @@ def run_etl(is_daily=False):
         raise
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--daily", action="store_true", help="Run daily ETL process")
-    args = parser.parse_args()
-
     try:
-        run_etl(is_daily=args.daily)
+        run_etl()
         logging.info("ETL process completed successfully")
     except Exception as e:
         logging.error(f"Script execution failed: {e}")
